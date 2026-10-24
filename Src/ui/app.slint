@@ -101,9 +101,9 @@ export component MainWindow inherits Window {
     in-out property <bool> fav-only: false;
     in-out property <string> notice;
 
-    out property <length> vx: (root.list-visible && root.list-left && !root.fullscreen) ? root.list-w : 0px;
+    out property <length> vx: (root.list-visible && root.list-left) ? root.list-w : 0px;
     out property <length> vy: 0px;
-    out property <length> vw: root.width - ((root.list-visible && !root.fullscreen) ? root.list-w : 0px);
+    out property <length> vw: root.width - (root.list-visible ? root.list-w : 0px);
     out property <length> vh: root.height - root.bar-h;
 
     property <length> list-w: 330px;
@@ -198,7 +198,7 @@ export component MainWindow inherits Window {
         }
 
         // ---------- channel list ----------
-        if root.list-visible && !root.fullscreen : Rectangle {
+        if root.list-visible : Rectangle {
             x: root.list-left ? 0px : root.width - root.list-w;
             y: 0px;
             width: root.list-w;

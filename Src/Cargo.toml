@@ -1,6 +1,6 @@
 [package]
 name = "iptvplayer"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 build = "build.rs"
 description = "IPTV Player для Windows 11 x64"
