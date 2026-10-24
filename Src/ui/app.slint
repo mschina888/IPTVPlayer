@@ -1,0 +1,702 @@
+import { Slider, ListView, Palette, Button, ComboBox, LineEdit, SpinBox, Switch } from "std-widgets.slint";
+
+export struct ChannelRow {
+    kind: int,
+    idx: int,
+    num: int,
+    name: string,
+    now: string,
+    logo: image,
+    has-logo: bool,
+    fav: bool,
+    playing: bool,
+    collapsed: bool,
+}
+
+export struct ChToggle {
+    name: string,
+    shown: bool,
+    group: string,
+}
+
+export struct HotkeyRow {
+    label: string,
+    action: string,
+    key: string,
+}
+
+export struct Cfg {
+    playlist-url: string,
+    playlist-file: string,
+    epg-url: string,
+    update-on-start: bool,
+    update-hours: int,
+    theme: int,
+    lang: int,
+    list-left: bool,
+    font-size: int,
+    show-clock: bool,
+    gpu: bool,
+    audio-lang: string,
+    mono: bool,
+    deint: bool,
+    aspect: int,
+    brightness: int,
+    contrast: int,
+    saturation: int,
+    local-ip: string,
+    udp-proxy: string,
+    autostart: bool,
+}
+
+component IconButton inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> active: false;
+    callback clicked();
+    width: 40px;
+    height: 36px;
+    border-radius: 6px;
+    background: ta.pressed ? Palette.control-background.darker(0.15) : ta.has-hover ? Palette.control-background : transparent;
+    Text {
+        text: root.glyph;
+        font-family: "Segoe Fluent Icons";
+        font-size: 16px;
+        color: root.active ? #9fd0ff : Palette.foreground;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "IPTV Player для Windows 11 x64";
+    default-font-family: root.lang == 6 ? "Microsoft YaHei UI" : "";
+    icon: @image-url("../assets/icon.png");
+    min-width: 640px;
+    min-height: 380px;
+    preferred-width: 1150px;
+    preferred-height: 760px;
+    background: Palette.background;
+    full-screen: root.fullscreen;
+    always-on-top: root.on-top;
+
+    in-out property <[ChannelRow]> rows;
+    in-out property <int> lang: 0;
+    in-out property <int> theme: 0;
+    in-out property <bool> list-visible: true;
+    in-out property <bool> list-left: false;
+    in-out property <bool> fullscreen: false;
+    in-out property <bool> on-top: false;
+    in-out property <int> font-size: 13;
+    in-out property <bool> show-clock: false;
+    in-out property <string> clock;
+    in-out property <string> cur-name;
+    in-out property <bool> playing: false;
+    in-out property <bool> cur-fav: false;
+    in-out property <bool> osd-on: true;
+    in-out property <float> volume: 80;
+    in-out property <bool> muted: false;
+    in-out property <bool> fav-only: false;
+    in-out property <string> notice;
+
+    out property <length> vx: (root.list-visible && root.list-left && !root.fullscreen) ? root.list-w : 0px;
+    out property <length> vy: 0px;
+    out property <length> vw: root.width - ((root.list-visible && !root.fullscreen) ? root.list-w : 0px);
+    out property <length> vh: root.height - root.bar-h;
+
+    property <length> list-w: 330px;
+    property <length> bar-h: root.fullscreen ? 0px : 52px;
+    property <length> row-h: (root.font-size * 3.5) * 1px;
+
+    callback channel-clicked(int);
+    callback group-toggled(string);
+    callback fav-toggled(int);
+    callback cur-fav-clicked();
+    callback play-pause();
+    callback stop-clicked();
+    callback prev-clicked();
+    callback next-clicked();
+    callback volume-changed(float);
+    callback mute-clicked();
+    callback list-clicked();
+    callback osd-clicked();
+    callback settings-clicked();
+    callback fullscreen-clicked();
+    callback fav-mode-clicked();
+    callback menu-requested();
+    callback key-event(string, bool, bool, bool);
+    callback video-geometry(length, length, length, length);
+
+    changed vx => { root.video-geometry(root.vx, root.vy, root.vw, root.vh); }
+    changed vw => { root.video-geometry(root.vx, root.vy, root.vw, root.vh); }
+    changed vh => { root.video-geometry(root.vx, root.vy, root.vw, root.vh); }
+
+    function apply-theme() {
+        if (root.theme == 1) {
+            Palette.color-scheme = ColorScheme.light;
+        } else if (root.theme == 2) {
+            Palette.color-scheme = ColorScheme.dark;
+        } else {
+            Palette.color-scheme = ColorScheme.unknown;
+        }
+    }
+    changed theme => { root.apply-theme(); }
+    init => {
+        root.apply-theme();
+        fs.focus();
+    }
+
+    function t(ru: string, en: string) -> string {
+        return root.lang == 0 ? ru : en;
+    }
+
+    function keyname(k: string) -> string {
+        if (k == Key.UpArrow) { return "Up"; }
+        if (k == Key.DownArrow) { return "Down"; }
+        if (k == Key.LeftArrow) { return "Left"; }
+        if (k == Key.RightArrow) { return "Right"; }
+        if (k == Key.PageUp) { return "PgUp"; }
+        if (k == Key.PageDown) { return "PgDn"; }
+        if (k == Key.Home) { return "Home"; }
+        if (k == Key.End) { return "End"; }
+        if (k == Key.Escape) { return "Esc"; }
+        if (k == Key.Return) { return "Enter"; }
+        if (k == Key.Tab) { return "Tab"; }
+        if (k == Key.Delete) { return "Delete"; }
+        if (k == Key.Backspace) { return "Backspace"; }
+        if (k == Key.F1) { return "F1"; }
+        if (k == Key.F2) { return "F2"; }
+        if (k == Key.F3) { return "F3"; }
+        if (k == Key.F4) { return "F4"; }
+        if (k == Key.F5) { return "F5"; }
+        if (k == Key.F6) { return "F6"; }
+        if (k == Key.F7) { return "F7"; }
+        if (k == Key.F8) { return "F8"; }
+        if (k == Key.F9) { return "F9"; }
+        if (k == Key.F10) { return "F10"; }
+        if (k == Key.F11) { return "F11"; }
+        if (k == Key.F12) { return "F12"; }
+        if (k == " ") { return "Space"; }
+        return k;
+    }
+
+    fs := FocusScope {
+        key-pressed(e) => {
+            root.key-event(root.keyname(e.text), e.modifiers.control, e.modifiers.alt, e.modifiers.shift);
+            return accept;
+        }
+
+        // ---------- video area (native child window is placed above it) ----------
+        Rectangle {
+            x: root.vx;
+            y: root.vy;
+            width: root.vw;
+            height: root.vh;
+            background: #000000;
+        }
+
+        // ---------- channel list ----------
+        if root.list-visible && !root.fullscreen : Rectangle {
+            x: root.list-left ? 0px : root.width - root.list-w;
+            y: 0px;
+            width: root.list-w;
+            height: root.height - root.bar-h;
+            background: Palette.alternate-background;
+
+            ListView {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                for r[i] in root.rows : Rectangle {
+                    height: root.row-h;
+                    if r.kind == 0 : Rectangle {
+                        background: Palette.control-background;
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 8px;
+                            Text {
+                                text: r.collapsed ? "\u{E76C}" : "\u{E70D}";
+                                font-family: "Segoe Fluent Icons";
+                                font-size: (root.font-size - 1) * 1px;
+                                color: Palette.foreground;
+                                vertical-alignment: center;
+                                width: 16px;
+                            }
+                            Text {
+                                text: r.name;
+                                font-size: root.font-size * 1px;
+                                font-weight: 700;
+                                color: Palette.foreground;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                        TouchArea {
+                            clicked => { root.group-toggled(r.name); }
+                            pointer-event(e) => {
+                                if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                                    root.menu-requested();
+                                }
+                            }
+                        }
+                    }
+                    if r.kind == 1 : Rectangle {
+                        background: r.playing ? Palette.selection-background : (ca.has-hover ? Palette.control-background : transparent);
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            padding-top: 4px;
+                            padding-bottom: 4px;
+                            spacing: 8px;
+                            Rectangle {
+                                width: root.row-h - 8px;
+                                height: root.row-h - 8px;
+                                border-radius: 4px;
+                                background: r.has-logo ? transparent : Palette.control-background;
+                                if r.has-logo : Image {
+                                    source: r.logo;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    image-fit: contain;
+                                }
+                                if !r.has-logo : Image {
+                                    source: @image-url("../assets/icon.png");
+                                    width: parent.width;
+                                    height: parent.height;
+                                    image-fit: contain;
+                                    opacity: 0.5;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: r.num + ". " + r.name;
+                                    font-size: root.font-size * 1px;
+                                    font-weight: 600;
+                                    color: r.playing ? Palette.selection-foreground : Palette.foreground;
+                                    overflow: elide;
+                                }
+                                if r.now != "" : Text {
+                                    text: r.now;
+                                    font-size: (root.font-size - 2) * 1px;
+                                    color: r.playing ? Palette.selection-foreground : Palette.foreground.transparentize(0.35);
+                                    overflow: elide;
+                                }
+                            }
+                            Rectangle {
+                                width: 28px;
+                                Text {
+                                    text: r.fav ? "\u{EB52}" : "\u{EB51}";
+                                    font-family: "Segoe Fluent Icons";
+                                    font-size: 15px;
+                                    color: r.fav ? #e5484d : Palette.foreground.transparentize(0.5);
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                TouchArea {
+                                    clicked => { root.fav-toggled(r.idx); }
+                                }
+                            }
+                        }
+                        ca := TouchArea {
+                            width: parent.width - 36px;
+                            clicked => { root.channel-clicked(r.idx); }
+                            pointer-event(e) => {
+                                if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                                    root.menu-requested();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---------- bottom control bar ----------
+        if !root.fullscreen : Rectangle {
+            x: 0px;
+            y: root.height - root.bar-h;
+            width: root.width;
+            height: root.bar-h;
+            background: Palette.control-background;
+
+            TouchArea {
+                pointer-event(e) => {
+                    if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                        root.menu-requested();
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+                spacing: 4px;
+                IconButton { glyph: root.playing ? "\u{E769}" : "\u{E768}"; clicked => { root.play-pause(); } }
+                IconButton { glyph: "\u{E71A}"; clicked => { root.stop-clicked(); } }
+                IconButton { glyph: "\u{E892}"; clicked => { root.prev-clicked(); } }
+                IconButton { glyph: "\u{E893}"; clicked => { root.next-clicked(); } }
+                IconButton { glyph: root.cur-fav ? "\u{EB52}" : "\u{EB51}"; active: root.cur-fav; clicked => { root.cur-fav-clicked(); } }
+                IconButton { glyph: root.muted ? "\u{E74F}" : "\u{E767}"; clicked => { root.mute-clicked(); } }
+                Slider {
+                    width: 120px;
+                    minimum: 0;
+                    maximum: 100;
+                    value: root.volume;
+                    changed(v) => { root.volume-changed(v); }
+                }
+                Text {
+                    text: root.notice != "" ? root.notice : root.cur-name;
+                    font-size: root.font-size * 1px;
+                    color: Palette.foreground;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if root.show-clock : Text {
+                    text: root.clock;
+                    font-size: root.font-size * 1px;
+                    color: Palette.foreground;
+                    vertical-alignment: center;
+                }
+                IconButton { glyph: "\u{E946}"; active: root.osd-on; clicked => { root.osd-clicked(); } }
+                IconButton { glyph: "\u{E8FD}"; active: root.list-visible; clicked => { root.list-clicked(); } }
+                IconButton { glyph: "\u{E740}"; clicked => { root.fullscreen-clicked(); } }
+                IconButton { glyph: "\u{E713}"; clicked => { root.settings-clicked(); } }
+            }
+        }
+    }
+}
+
+// LineEdit that also handles Ctrl+V/C/X/A on non-Latin keyboard layouts (Russian etc.)
+component PLineEdit inherits FocusScope {
+    in-out property <string> text;
+    callback edited(string);
+    forward-focus: le;
+    horizontal-stretch: 1;
+    min-width: 60px;
+    preferred-height: le.preferred-height;
+    capture-key-pressed(e) => {
+        if (e.modifiers.control && !e.modifiers.alt) {
+            if (e.text == "м" || e.text == "М" || e.text == "\u{16}") { le.paste(); return accept; }
+            if (e.text == "с" || e.text == "С" || e.text == "\u{3}") { le.copy(); return accept; }
+            if (e.text == "ч" || e.text == "Ч" || e.text == "\u{18}") { le.cut(); return accept; }
+            if (e.text == "ф" || e.text == "Ф" || e.text == "\u{1}") { le.select-all(); return accept; }
+        }
+        return reject;
+    }
+    le := LineEdit {
+        width: parent.width;
+        height: parent.height;
+        text <=> root.text;
+        edited(s) => { root.edited(s); }
+    }
+}
+export global Tr {
+    pure callback t(int, string, string) -> string;
+}
+
+export component SettingsWindow inherits Window {
+    title: root.t("Настройки", "Settings");
+    default-font-family: root.lang == 6 ? "Microsoft YaHei UI" : "";
+    icon: @image-url("../assets/icon.png");
+    preferred-width: 860px;
+    preferred-height: 620px;
+    min-width: 720px;
+    min-height: 520px;
+    background: Palette.background;
+
+    in-out property <Cfg> cfg;
+    in-out property <int> lang: 0;
+    in-out property <int> theme: 0;
+    in-out property <int> page: 0;
+    in property <[ChToggle]> chs;
+    in property <[HotkeyRow]> hks;
+    in property <[string]> audio-devices;
+    in property <int> audio-dev-index: 0;
+    in property <string> info;
+    in property <string> info2;
+    in property <string> repo-label;
+    in property <string> repo-url;
+    in property <string> rel-label;
+    in property <string> rel-url;
+    callback open-link(string);
+    in-out property <string> status;
+
+    callback apply(Cfg, string);
+    callback close-clicked();
+    callback ch-toggled(int, bool);
+    callback hotkey-edited(int, string);
+    callback hotkeys-reset();
+    callback check-update();
+    callback browse-playlist() -> string;
+    callback browse-epg() -> string;
+
+    changed theme => { root.apply-theme(); }
+    init => { root.apply-theme(); }
+
+    function apply-theme() {
+        if (root.theme == 1) {
+            Palette.color-scheme = ColorScheme.light;
+        } else if (root.theme == 2) {
+            Palette.color-scheme = ColorScheme.dark;
+        } else {
+            Palette.color-scheme = ColorScheme.unknown;
+        }
+    }
+
+    function t(ru: string, en: string) -> string {
+        return Tr.t(root.lang, ru, en);
+    }
+
+    property <[string]> nav: [root.t("Источники", "Sources"), root.t("Вид", "Appearance"), root.t("Видео и звук", "Video & audio"), root.t("Каналы", "Channels"), root.t("Клавиши", "Hotkeys"), root.t("Система", "System"), root.t("О программе", "About")];
+
+    HorizontalLayout {
+        Rectangle {
+            width: 210px;
+            background: Palette.alternate-background;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 4px;
+                alignment: start;
+                for n[i] in root.nav : Rectangle {
+                    height: 40px;
+                    border-radius: 6px;
+                    background: root.page == i ? Palette.selection-background : (nt.has-hover ? Palette.control-background : transparent);
+                    Text {
+                        x: 14px;
+                        text: n;
+                        color: root.page == i ? Palette.selection-foreground : Palette.foreground;
+                        font-size: 14px;
+                        vertical-alignment: center;
+                    }
+                    nt := TouchArea { clicked => { root.page = i; } }
+                }
+            }
+        }
+
+        VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+
+            // ---- page 0: sources ----
+            if root.page == 0 : VerticalLayout {
+                spacing: 10px;
+                alignment: start;
+                Text { text: root.t("Список каналов (M3U/M3U8)", "Channel list (M3U/M3U8)"); font-size: 18px; font-weight: 700; color: Palette.foreground; }
+                Text { text: root.t("Адрес списка (URL)", "List address (URL)"); color: Palette.foreground; }
+                PLineEdit { text: root.cfg.playlist-url; edited(s) => { root.cfg.playlist-url = s; } }
+                Text { text: root.t("Или локальный файл M3U/M3U8 (если указан, берётся он)", "Or a local M3U/M3U8 file (used if set)"); color: Palette.foreground; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    pf := PLineEdit { text: root.cfg.playlist-file; edited(s) => { root.cfg.playlist-file = s; } }
+                    Button { text: root.t("Обзор...", "Browse..."); horizontal-stretch: 0; clicked => { let r = root.browse-playlist(); if (r != "") { root.cfg.playlist-file = r; pf.text = r; } } }
+                }
+                Text { text: root.t("Телепрограмма XMLTV (URL, .xml или .xml.gz). Пусто — адрес url-tvg из списка", "XMLTV guide (URL, .xml or .xml.gz). Empty — url-tvg from the list"); color: Palette.foreground; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    pe := PLineEdit { text: root.cfg.epg-url; edited(s) => { root.cfg.epg-url = s; } }
+                    Button { text: root.t("Обзор...", "Browse..."); horizontal-stretch: 0; clicked => { let r = root.browse-epg(); if (r != "") { root.cfg.epg-url = r; pe.text = r; } } }
+                }
+                Switch { text: root.t("Обновлять список и телепрограмму при запуске", "Refresh list and guide on start"); checked: root.cfg.update-on-start; toggled => { root.cfg.update-on-start = self.checked; } }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: root.t("Обновлять по расписанию, каждые (часов, 0 — выкл.)", "Auto-refresh every (hours, 0 = off)"); color: Palette.foreground; vertical-alignment: center; }
+                    SpinBox { minimum: 0; maximum: 72; value: root.cfg.update-hours; edited(v) => { root.cfg.update-hours = v; } }
+                }
+                Text { text: root.t("Прокси UDP→HTTP (host:порт, для udp://@... адресов)", "UDP→HTTP proxy (host:port, for udp://@... addresses)"); color: Palette.foreground; }
+                PLineEdit { text: root.cfg.udp-proxy; edited(s) => { root.cfg.udp-proxy = s; } }
+                Text { text: root.t("Сетевой интерфейс для UDP-мультикаста (локальный IP)", "Network interface for UDP multicast (local IP)"); color: Palette.foreground; }
+                PLineEdit { text: root.cfg.local-ip; edited(s) => { root.cfg.local-ip = s; } }
+            }
+
+            // ---- page 1: appearance ----
+            if root.page == 1 : VerticalLayout {
+                spacing: 12px;
+                alignment: start;
+                Text { text: root.t("Вид", "Appearance"); font-size: 18px; font-weight: 700; color: Palette.foreground; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: root.t("Тема", "Theme"); color: Palette.foreground; vertical-alignment: center; width: 200px; }
+                    ComboBox {
+                        model: [root.t("Как в Windows", "Like Windows"), root.t("Светлая", "Light"), root.t("Тёмная", "Dark")];
+                        current-index: root.cfg.theme;
+                        selected(v) => { root.cfg.theme = self.current-index; root.theme = self.current-index; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: root.t("Язык интерфейса", "Interface language"); color: Palette.foreground; vertical-alignment: center; width: 200px; }
+                    ComboBox {
+                        model: ["Русский", "English", "Deutsch", "Español", "Français", "Italiano", "中文"];
+                        current-index: root.cfg.lang;
+                        selected(v) => { root.cfg.lang = self.current-index; root.lang = self.current-index; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: root.t("Размер шрифта списка", "List font size"); color: Palette.foreground; vertical-alignment: center; width: 200px; }
+                    SpinBox { minimum: 9; maximum: 24; value: root.cfg.font-size; edited(v) => { root.cfg.font-size = v; } }
+                }
+                Switch { text: root.t("Список каналов слева", "Channel list on the left"); checked: root.cfg.list-left; toggled => { root.cfg.list-left = self.checked; } }
+                Switch { text: root.t("Показывать часы", "Show clock"); checked: root.cfg.show-clock; toggled => { root.cfg.show-clock = self.checked; } }
+            }
+
+            // ---- page 2: video & audio ----
+            if root.page == 2 : VerticalLayout {
+                spacing: 8px;
+                alignment: start;
+                Text { text: root.t("Видео и звук", "Video & audio"); font-size: 18px; font-weight: 700; color: Palette.foreground; }
+                Switch { text: root.t("Аппаратное ускорение GPU (если есть)", "GPU hardware acceleration (if available)"); checked: root.cfg.gpu; toggled => { root.cfg.gpu = self.checked; } }
+                Switch { text: root.t("Деинтерлейс", "Deinterlace"); checked: root.cfg.deint; toggled => { root.cfg.deint = self.checked; } }
+                Switch { text: root.t("Моно", "Mono"); checked: root.cfg.mono; toggled => { root.cfg.mono = self.checked; } }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: root.t("Соотношение сторон", "Aspect ratio"); color: Palette.foreground; vertical-alignment: center; width: 200px; }
+                    ComboBox {
+                        model: [root.t("Авто", "Auto"), "4:3", "16:9", "16:10"];
+                        current-index: root.cfg.aspect;
+                        selected(v) => { root.cfg.aspect = self.current-index; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: root.t("Язык звуковой дорожки (ru, en...)", "Audio track language (ru, en...)"); color: Palette.foreground; vertical-alignment: center; width: 200px; }
+                    PLineEdit { text: root.cfg.audio-lang; width: 120px; edited(s) => { root.cfg.audio-lang = s; } }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: root.t("Яркость", "Brightness"); color: Palette.foreground; vertical-alignment: center; width: 200px; }
+                    Slider { minimum: -100; maximum: 100; value: root.cfg.brightness; changed(v) => { root.cfg.brightness = Math.round(v); } }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: root.t("Контраст", "Contrast"); color: Palette.foreground; vertical-alignment: center; width: 200px; }
+                    Slider { minimum: -100; maximum: 100; value: root.cfg.contrast; changed(v) => { root.cfg.contrast = Math.round(v); } }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: root.t("Насыщенность", "Saturation"); color: Palette.foreground; vertical-alignment: center; width: 200px; }
+                    Slider { minimum: -100; maximum: 100; value: root.cfg.saturation; changed(v) => { root.cfg.saturation = Math.round(v); } }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: root.t("Аудиоустройство", "Audio device"); color: Palette.foreground; vertical-alignment: center; width: 200px; }
+                    ComboBox {
+                        model: root.audio-devices;
+                        current-index: root.audio-dev-index;
+                        selected(v) => { root.status = "dev:" + self.current-index; }
+                    }
+                }
+            }
+
+            // ---- page 3: channels ----
+            if root.page == 3 : VerticalLayout {
+                spacing: 8px;
+                Text { text: root.t("Показывать каналы", "Show channels"); font-size: 18px; font-weight: 700; color: Palette.foreground; }
+                ListView {
+                    for c[i] in root.chs : Rectangle {
+                        height: 34px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Switch { checked: c.shown; toggled => { root.ch-toggled(i, self.checked); } }
+                            Text { text: c.name; color: Palette.foreground; vertical-alignment: center; overflow: elide; }
+                        }
+                    }
+                }
+            }
+
+            // ---- page 4: hotkeys ----
+            if root.page == 4 : VerticalLayout {
+                spacing: 8px;
+                Text { text: root.t("Клавиши (например: F, Ctrl+P, Alt+X, Space, Up, PgDn, F6)", "Hotkeys (e.g. F, Ctrl+P, Alt+X, Space, Up, PgDn, F6)"); font-size: 15px; font-weight: 700; color: Palette.foreground; wrap: word-wrap; }
+                ListView {
+                    for h[i] in root.hks : Rectangle {
+                        height: 40px;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: h.label; color: Palette.foreground; vertical-alignment: center; width: 300px; overflow: elide; }
+                            PLineEdit { text: h.key; width: 180px; edited(s) => { root.hotkey-edited(i, s); } }
+                        }
+                    }
+                }
+                Button { text: root.t("Сбросить клавиши", "Reset hotkeys"); clicked => { root.hotkeys-reset(); } }
+            }
+
+            // ---- page 5: system ----
+            if root.page == 5 : VerticalLayout {
+                spacing: 12px;
+                alignment: start;
+                Text { text: root.t("Система", "System"); font-size: 18px; font-weight: 700; color: Palette.foreground; }
+                Switch { text: root.t("Запускать вместе с Windows", "Start with Windows"); checked: root.cfg.autostart; toggled => { root.cfg.autostart = self.checked; } }
+                Button { text: root.t("Проверить обновления программы", "Check for program updates"); clicked => { root.check-update(); } }
+                Text { text: root.status; color: Palette.foreground; wrap: word-wrap; }
+            }
+
+            // ---- page 6: about ----
+            if root.page == 6 : VerticalLayout {
+                spacing: 12px;
+                alignment: start;
+                Image { source: @image-url("../assets/icon.png"); width: 96px; height: 96px; }
+                Text { text: "IPTV Player для Windows 11 x64"; font-size: 20px; font-weight: 700; color: Palette.foreground; }
+                Text { text: root.info; color: Palette.foreground; wrap: word-wrap; }
+                Text {
+                    text: root.repo-label + ": " + root.repo-url;
+                    color: ta1.has-hover ? #9fd0ff : #4da3ff;
+                    wrap: word-wrap;
+                    ta1 := TouchArea { mouse-cursor: pointer; clicked => { root.open-link(root.repo-url); } }
+                }
+                Text {
+                    text: root.rel-label + ": " + root.rel-url;
+                    color: ta2.has-hover ? #9fd0ff : #4da3ff;
+                    wrap: word-wrap;
+                    ta2 := TouchArea { mouse-cursor: pointer; clicked => { root.open-link(root.rel-url); } }
+                }
+                Text { text: root.info2; color: Palette.foreground; wrap: word-wrap; }
+            }
+
+            Rectangle { vertical-stretch: 1; height: 0px; }
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+                height: 36px;
+                Button { text: root.t("Применить", "Apply"); primary: true; min-width: 100px; clicked => { root.apply(root.cfg, root.status); } }
+                Button { text: root.t("Закрыть", "Close"); min-width: 100px; clicked => { root.close-clicked(); } }
+            }
+        }
+    }
+}
+
+export component AppTray inherits SystemTrayIcon {
+    in property <string> label-show: "Показать";
+    in property <string> label-quit: "Выход";
+    callback show-window();
+    callback quit();
+    icon: @image-url("../assets/icon.png");
+    tooltip: "IPTV Player";
+    clicked => { root.show-window(); }
+    Menu {
+        MenuItem {
+            title: root.label-show;
+            activated => { root.show-window(); }
+        }
+        MenuSeparator {}
+        MenuItem {
+            title: root.label-quit;
+            activated => { root.quit(); }
+        }
+    }
+}
+
+
+
+
+
+

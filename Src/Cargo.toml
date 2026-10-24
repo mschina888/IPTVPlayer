@@ -1,0 +1,39 @@
+[package]
+name = "iptvplayer"
+version = "0.1.8"
+edition = "2021"
+build = "build.rs"
+description = "IPTV Player для Windows 11 x64"
+
+[dependencies]
+slint = { version = "~1.17", default-features = false, features = ["std", "backend-winit", "renderer-software", "raw-window-handle-06", "compat-1-2", "system-tray", "image-default-formats"] }
+libloading = "0.8"
+raw-window-handle = "0.6"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_Time", "Win32_UI_Shell", "Win32_UI_Controls_Dialogs", "Win32_UI_Controls", "Win32_System_Threading", "Win32_Security", "Win32_UI_Input_KeyboardAndMouse"] }
+ureq = { version = "2", default-features = false, features = ["tls"] }
+flate2 = "1"
+quick-xml = "0.36"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+
+[build-dependencies]
+slint-build = "~1.17"
+winresource = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+
+
+
+
+
+
+
+
+
