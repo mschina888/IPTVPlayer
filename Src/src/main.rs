@@ -1051,6 +1051,7 @@ fn ch_rows(st: &State) -> Vec<ChToggle> {
 fn open_settings(app: &Rc<App>) {
     if let Some(sw) = app.settings_win.borrow().as_ref() {
         let _ = sw.show();
+        kick_settings_repaint();
         return;
     }
     let sw = match SettingsWindow::new() {
@@ -1151,6 +1152,37 @@ fn open_settings(app: &Rc<App>) {
 
     let _ = sw.show();
     *app.settings_win.borrow_mut() = Some(sw);
+    kick_settings_repaint();
+}
+
+/// The settings window sometimes keeps a stale/partially painted buffer when it opens over the playing video:
+/// force a full repaint (resize by one pixel and back, redraw requests).
+fn kick_settings_repaint() {
+    fn redraw() {
+        with_app(|a| {
+            if let Some(sw) = a.settings_win.borrow().as_ref() {
+                sw.window().request_redraw();
+            }
+        });
+    }
+    Timer::single_shot(Duration::from_millis(60), redraw);
+    Timer::single_shot(Duration::from_millis(150), || {
+        with_app(|a| {
+            if let Some(sw) = a.settings_win.borrow().as_ref() {
+                let s = sw.window().size();
+                sw.window().set_size(PhysicalSize::new(s.width + 1, s.height));
+            }
+        });
+    });
+    Timer::single_shot(Duration::from_millis(300), || {
+        with_app(|a| {
+            if let Some(sw) = a.settings_win.borrow().as_ref() {
+                let s = sw.window().size();
+                sw.window().set_size(PhysicalSize::new(s.width.saturating_sub(1), s.height));
+            }
+        });
+    });
+    Timer::single_shot(Duration::from_millis(600), redraw);
 }
 
 fn apply_cfg(app: &Rc<App>, cfg: Cfg, status: String) {
@@ -1243,6 +1275,7 @@ fn check_update(app: &Rc<App>) {
         });
     });
 }
+
 
 
 
