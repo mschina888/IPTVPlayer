@@ -10,7 +10,7 @@ mod settings;
 mod winutil;
 
 use settings::{mpv_key, norm_key, Settings, ACTIONS};
-use slint::{CloseRequestResponse, ComponentHandle, Image, ModelRc, PhysicalPosition, PhysicalSize, SharedString, Timer, TimerMode, VecModel};
+use slint::{CloseRequestResponse, ComponentHandle, Image, Model, ModelRc, PhysicalPosition, PhysicalSize, SharedString, Timer, TimerMode, VecModel};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -31,6 +31,7 @@ struct State {
     cur: Option<usize>,
     logos: HashMap<usize, Image>,
     audio_names: Vec<String>,
+    audio_descs: Vec<String>,
 }
 
 struct App {
@@ -100,6 +101,7 @@ fn main() -> Result<(), slint::PlatformError> {
             cur: None,
             logos: HashMap::new(),
             audio_names: vec![],
+    audio_descs: vec![],
         }),
         player: RefCell::new(None),
         rows,
@@ -175,7 +177,6 @@ fn apply_settings_to_window(app: &Rc<App>) {
     w.set_muted(st.s.muted);
     w.set_on_top(st.s.on_top);
     w.set_osd_on(st.s.osd_on);
-    w.set_fav_only(st.s.fav_only);
     app.tray.set_label_show(tr(st.s.lang, "Показать", "Show").into());
     app.tray.set_label_quit(tr(st.s.lang, "Выход", "Exit").into());
 }
@@ -231,18 +232,27 @@ fn init_video(app: &Rc<App>) {
             // audio device list
             if let Some(p) = app.player.borrow().as_ref() {
                 let mut names = vec![String::new()];
+                let mut descs = vec![String::new()];
                 if let Some(json) = p.mpv.get("audio-device-list") {
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
                         if let Some(arr) = v.as_array() {
                             for d in arr {
                                 if let Some(n) = d.get("name").and_then(|n| n.as_str()) {
+                                    if n == "auto" { continue; }
+                                    let desc = d.get("description").and_then(|x| x.as_str()).unwrap_or(n);
                                     names.push(n.to_string());
+                                    descs.push(desc.to_string());
                                 }
                             }
                         }
                     }
                 }
-                app.st.borrow_mut().audio_names = names;
+                dlog(&format!("audio devices: {} found; selected=[{}]", names.len() - 1, app.st.borrow().s.audio_device));
+                {
+                    let mut st = app.st.borrow_mut();
+                    st.audio_names = names;
+                    st.audio_descs = descs;
+                }
             }
         }
         Err(e) => {
@@ -367,6 +377,12 @@ fn on_playlist(app: &Rc<App>, pl: m3u::Playlist, with_epg: bool) {
     start_logos(app);
     rebuild_rows(app);
     refresh_cur_info(app);
+    if let Some(idx) = app.st.borrow().cur {
+        if let Some(pos) = app.rows.iter().position(|r| r.kind == 1 && r.idx == idx as i32) {
+            app.win.set_scroll_to_row(-1);
+            app.win.set_scroll_to_row(pos as i32);
+        }
+    }
     if with_epg {
         load_epg(app);
     }
@@ -394,8 +410,8 @@ fn on_playlist(app: &Rc<App>, pl: m3u::Playlist, with_epg: bool) {
                 if let Some(p) = a.player.borrow().as_ref() {
                     let g = |k: &str| p.mpv.get(k).unwrap_or_default();
                     dlog(&format!(
-                        "autoplay: time-pos={} codec={} size={}x{} hwdec={} audio={} paused={}",
-                        g("time-pos"), g("video-codec"), g("width"), g("height"), g("hwdec-current"), g("audio-codec-name"), g("pause")
+                        "autoplay: time-pos={} codec={} size={}x{} hwdec={} audio={} paused={} ao={} device={} vol={} mute={} atime={}",
+                        g("time-pos"), g("video-codec"), g("width"), g("height"), g("hwdec-current"), g("audio-codec-name"), g("pause"), g("current-ao"), g("audio-device"), g("volume"), g("mute"), g("audio-pts")
                     ));
                 }
             })
@@ -535,7 +551,6 @@ fn epg_now_title(st: &State, idx: usize, now: i64) -> Option<(String, i64, i64)>
 fn rebuild_rows(app: &Rc<App>) {
     let st = app.st.borrow();
     let hidden: HashSet<String> = st.s.hidden.iter().cloned().collect();
-    let favs: HashSet<String> = st.s.favorites.iter().cloned().collect();
     let coll: HashSet<String> = st.s.collapsed.iter().cloned().collect();
     let now = epg::now_unix();
     let mut rows: Vec<ChannelRow> = Vec::with_capacity(st.channels.len() + 32);
@@ -544,10 +559,6 @@ fn rebuild_rows(app: &Rc<App>) {
     for (i, c) in st.channels.iter().enumerate() {
         let key = c.key();
         if hidden.contains(&key) {
-            continue;
-        }
-        let is_fav = favs.contains(&key);
-        if st.s.fav_only && !is_fav {
             continue;
         }
         if last != Some(c.group.as_str()) {
@@ -564,7 +575,6 @@ fn rebuild_rows(app: &Rc<App>) {
                     now: SharedString::new(),
                     logo: Image::default(),
                     has_logo: false,
-                    fav: false,
                     playing: false,
                     collapsed,
                 });
@@ -582,7 +592,6 @@ fn rebuild_rows(app: &Rc<App>) {
             now: epg_now_title(&st, i, now).map(|t| t.0).unwrap_or_default().into(),
             logo: logo.cloned().unwrap_or_default(),
             has_logo: logo.is_some(),
-            fav: is_fav,
             playing: st.cur == Some(i),
             collapsed: false,
         });
@@ -600,7 +609,6 @@ fn refresh_cur_info(app: &Rc<App>) {
                 line.push_str(&format!(" — {} ({} {})", title, tr(st.s.lang, "до", "until"), epg::hhmm(stop)));
             }
             app.win.set_cur_name(line.into());
-            app.win.set_cur_fav(st.s.favorites.contains(&c.key()));
         }
     }
 }
@@ -640,6 +648,10 @@ fn play(app: &Rc<App>, idx: usize) {
         show_osd(app);
     }
     rebuild_rows(app);
+    if let Some(pos) = app.rows.iter().position(|r| r.kind == 1 && r.idx == idx as i32) {
+        app.win.set_scroll_to_row(-1);
+        app.win.set_scroll_to_row(pos as i32);
+    }
 }
 
 fn show_osd(app: &Rc<App>) {
@@ -661,7 +673,7 @@ fn visible_channels(st: &State) -> Vec<usize> {
         .enumerate()
         .filter(|(_, c)| {
             let k = c.key();
-            !st.s.hidden.contains(&k) && (!st.s.fav_only || st.s.favorites.contains(&k))
+            !st.s.hidden.contains(&k)
         })
         .map(|(i, _)| i)
         .collect()
@@ -694,21 +706,6 @@ fn set_volume(app: &Rc<App>, v: i32) {
     }
 }
 
-fn toggle_fav(app: &Rc<App>, idx: usize) {
-    {
-        let mut st = app.st.borrow_mut();
-        let Some(c) = st.channels.get(idx) else { return };
-        let key = c.key();
-        if let Some(p) = st.s.favorites.iter().position(|k| *k == key) {
-            st.s.favorites.remove(p);
-        } else {
-            st.s.favorites.push(key);
-        }
-        st.s.save();
-    }
-    refresh_cur_info(app);
-    rebuild_rows(app);
-}
 
 // ------------------------------------------------------------------ actions
 
@@ -761,6 +758,14 @@ fn do_action(app: &Rc<App>, action: &str) {
             let v = !app.win.get_list_visible();
             app.win.set_list_visible(v);
             app.st.borrow_mut().s.list_visible = v;
+            if v {
+                if let Some(idx) = app.st.borrow().cur {
+                    if let Some(pos) = app.rows.iter().position(|r| r.kind == 1 && r.idx == idx as i32) {
+                        app.win.set_scroll_to_row(-1);
+                        app.win.set_scroll_to_row(pos as i32);
+                    }
+                }
+            }
         }
         "settings" => open_settings(app),
         "tray" => hide_to_tray(app),
@@ -799,18 +804,6 @@ fn do_action(app: &Rc<App>, action: &str) {
             } else if let Some(p) = app.player.borrow().as_ref() {
                 p.mpv.command(&["show-text", "", "1"]);
             }
-        }
-        "fav" => {
-            let cur = app.st.borrow().cur;
-            if let Some(i) = cur {
-                toggle_fav(app, i);
-            }
-        }
-        "fav_mode" => {
-            let v = !app.st.borrow().s.fav_only;
-            app.st.borrow_mut().s.fav_only = v;
-            app.win.set_fav_only(v);
-            rebuild_rows(app);
         }
         "menu" => show_menu(app),
         _ => {}
@@ -886,7 +879,6 @@ fn show_menu(app: &Rc<App>) {
         sep(),
         mk(4, format!("{}{}", tr(l, "Список каналов", "Channel list"), hk("list")), app.win.get_list_visible()),
         mk(5, format!("{}{}", tr(l, "Телепрограмма поверх видео", "Programme overlay"), hk("osd")), app.win.get_osd_on()),
-        mk(6, format!("{}{}", tr(l, "Только избранные каналы", "Favourite channels only"), hk("fav_mode")), st.s.fav_only),
         sep(),
         mk(7, format!("{}{}", tr(l, "Настройки", "Settings"), hk("settings")), false),
         sep(),
@@ -901,7 +893,6 @@ fn show_menu(app: &Rc<App>) {
         3 => "on_top",
         4 => "list",
         5 => "osd",
-        6 => "fav_mode",
         7 => "settings",
         8 => "tray",
         9 => "quit",
@@ -948,10 +939,6 @@ fn wire_main(app: &Rc<App>) {
     });
 
     let a = app.clone();
-    w.on_fav_toggled(move |i| toggle_fav(&a, i as usize));
-    let a = app.clone();
-    w.on_cur_fav_clicked(move || do_action(&a, "fav"));
-    let a = app.clone();
     w.on_play_pause(move || toggle_pause(&a));
     let a = app.clone();
     w.on_stop_clicked(move || do_action(&a, "stop"));
@@ -971,8 +958,6 @@ fn wire_main(app: &Rc<App>) {
     w.on_settings_clicked(move || do_action(&a, "settings"));
     let a = app.clone();
     w.on_fullscreen_clicked(move || do_action(&a, "fullscreen"));
-    let a = app.clone();
-    w.on_fav_mode_clicked(move || do_action(&a, "fav_mode"));
     let a = app.clone();
     w.on_menu_requested(move || show_menu(&a));
 
@@ -1068,7 +1053,8 @@ fn open_settings(app: &Rc<App>) {
         let devs: Vec<SharedString> = st
             .audio_names
             .iter()
-            .map(|n| if n.is_empty() { tr(st.s.lang, "Авто (по умолчанию)", "Auto (default)").into() } else { SharedString::from(n.as_str()) })
+            .enumerate()
+            .map(|(i, n)| if n.is_empty() { tr(st.s.lang, "Авто (по умолчанию)", "Auto (default)").into() } else { SharedString::from(st.audio_descs.get(i).map(|d| d.as_str()).unwrap_or(n.as_str())) })
             .collect();
         let idx = st.audio_names.iter().position(|n| *n == st.s.audio_device).unwrap_or(0);
         sw.set_audio_devices(ModelRc::from(Rc::new(VecModel::from(devs))));

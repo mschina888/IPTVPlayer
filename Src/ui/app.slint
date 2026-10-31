@@ -8,7 +8,6 @@ export struct ChannelRow {
     now: string,
     logo: image,
     has-logo: bool,
-    fav: bool,
     playing: bool,
     collapsed: bool,
 }
@@ -94,11 +93,9 @@ export component MainWindow inherits Window {
     in-out property <string> clock;
     in-out property <string> cur-name;
     in-out property <bool> playing: false;
-    in-out property <bool> cur-fav: false;
     in-out property <bool> osd-on: true;
     in-out property <float> volume: 80;
     in-out property <bool> muted: false;
-    in-out property <bool> fav-only: false;
     in-out property <string> notice;
 
     out property <length> vx: (root.list-visible && root.list-left) ? root.list-w : 0px;
@@ -111,9 +108,8 @@ export component MainWindow inherits Window {
     property <length> row-h: (root.font-size * 3.5) * 1px;
 
     callback channel-clicked(int);
+    in-out property <int> scroll-to-row: -1;
     callback group-toggled(string);
-    callback fav-toggled(int);
-    callback cur-fav-clicked();
     callback play-pause();
     callback stop-clicked();
     callback prev-clicked();
@@ -124,7 +120,6 @@ export component MainWindow inherits Window {
     callback osd-clicked();
     callback settings-clicked();
     callback fullscreen-clicked();
-    callback fav-mode-clicked();
     callback menu-requested();
     callback key-event(string, bool, bool, bool);
     callback video-geometry(length, length, length, length);
@@ -198,18 +193,31 @@ export component MainWindow inherits Window {
         }
 
         // ---------- channel list ----------
-        if root.list-visible : Rectangle {
+        Rectangle {
+            visible: root.list-visible;
             x: root.list-left ? 0px : root.width - root.list-w;
             y: 0px;
             width: root.list-w;
             height: root.height - root.bar-h;
             background: Palette.alternate-background;
 
-            ListView {
+            chlist := ListView {
                 x: 0px;
                 y: 0px;
                 width: parent.width;
                 height: parent.height;
+                property <int> want-row: root.scroll-to-row;
+                changed want-row => {
+                    if (self.want-row < 0) {
+                        return;
+                    }
+                    let total: length = root.rows.length * root.row-h;
+                    let visible: length = self.visible-height;
+                    let target: length = self.want-row * root.row-h - visible / 2 + root.row-h / 2;
+                    let max-y: length = max(0px, total - visible);
+                    let clamped: length = max(0px, min(target, max-y));
+                    self.viewport-y = -clamped;
+                }
                 for r[i] in root.rows : Rectangle {
                     height: root.row-h;
                     if r.kind == 0 : Rectangle {
@@ -287,23 +295,9 @@ export component MainWindow inherits Window {
                                     overflow: elide;
                                 }
                             }
-                            Rectangle {
-                                width: 28px;
-                                Text {
-                                    text: r.fav ? "\u{EB52}" : "\u{EB51}";
-                                    font-family: "Segoe Fluent Icons";
-                                    font-size: 15px;
-                                    color: r.fav ? #e5484d : Palette.foreground.transparentize(0.5);
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                                TouchArea {
-                                    clicked => { root.fav-toggled(r.idx); }
-                                }
-                            }
                         }
                         ca := TouchArea {
-                            width: parent.width - 36px;
+                            width: parent.width;
                             clicked => { root.channel-clicked(r.idx); }
                             pointer-event(e) => {
                                 if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
@@ -342,7 +336,6 @@ export component MainWindow inherits Window {
                 IconButton { glyph: "\u{E71A}"; clicked => { root.stop-clicked(); } }
                 IconButton { glyph: "\u{E892}"; clicked => { root.prev-clicked(); } }
                 IconButton { glyph: "\u{E893}"; clicked => { root.next-clicked(); } }
-                IconButton { glyph: root.cur-fav ? "\u{EB52}" : "\u{EB51}"; active: root.cur-fav; clicked => { root.cur-fav-clicked(); } }
                 IconButton { glyph: root.muted ? "\u{E74F}" : "\u{E767}"; clicked => { root.mute-clicked(); } }
                 Slider {
                     width: 120px;

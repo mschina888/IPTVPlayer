@@ -18,8 +18,6 @@ pub const ACTIONS: &[(&str, &str, &str, &str)] = &[
     ("next", "PgDn", "Следующий канал", "Next channel"),
     ("prev", "PgUp", "Предыдущий канал", "Previous channel"),
     ("osd", "I", "Показать/скрыть передачу поверх видео", "Show/hide programme overlay"),
-    ("fav", "Ctrl+D", "Канал в избранное", "Toggle favourite"),
-    ("fav_mode", "Tab", "Все / избранные каналы", "All / favourite channels"),
     ("esc", "Esc", "Выйти из полного экрана", "Leave full screen"),
 ];
 
@@ -59,10 +57,8 @@ pub struct Settings {
     pub win_h: u32,
     pub maximized: bool,
     pub last_channel: String,
-    pub favorites: Vec<String>,
     pub hidden: Vec<String>,
     pub collapsed: Vec<String>,
-    pub fav_only: bool,
     pub hotkeys: BTreeMap<String, String>,
 }
 
@@ -106,10 +102,8 @@ impl Default for Settings {
             win_h: 0,
             maximized: false,
             last_channel: String::new(),
-            favorites: vec![],
             hidden: vec![],
             collapsed: vec![],
-            fav_only: false,
             hotkeys,
         }
     }
