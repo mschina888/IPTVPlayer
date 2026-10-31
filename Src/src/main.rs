@@ -71,8 +71,8 @@ fn tr(lang: i32, ru: &str, en: &str) -> String {
     i18n::tr(lang, ru, en)
 }
 
-const REPO_URL: &str = "https://github.com/ssergo71/IPTVPlayer";
-const RELEASES_URL: &str = "https://github.com/ssergo71/IPTVPlayer/releases";
+const REPO_URL: &str = "https://github.com/mschina888/IPTVPlayer";
+const RELEASES_URL: &str = "https://github.com/mschina888/IPTVPlayer/releases";
 
 // ------------------------------------------------------------------ main
 
