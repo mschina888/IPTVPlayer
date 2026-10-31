@@ -639,17 +639,25 @@ export component SettingsWindow inherits Window {
                 Image { source: @image-url("../assets/icon.png"); width: 96px; height: 96px; }
                 Text { text: "IPTV Player для Windows 11 x64"; font-size: 20px; font-weight: 700; color: Palette.foreground; }
                 Text { text: root.info; color: Palette.foreground; wrap: word-wrap; }
-                Text {
-                    text: root.repo-label + ": " + root.repo-url;
-                    color: ta1.has-hover ? #9fd0ff : #4da3ff;
-                    wrap: word-wrap;
-                    ta1 := TouchArea { mouse-cursor: pointer; clicked => { root.open-link(root.repo-url); } }
+                VerticalLayout {
+                    spacing: 2px;
+                    Text { text: root.repo-label + ":"; color: Palette.foreground; wrap: word-wrap; }
+                    Text {
+                        text: root.repo-url;
+                        color: ta1.has-hover ? #9fd0ff : #4da3ff;
+                        wrap: word-wrap;
+                        ta1 := TouchArea { mouse-cursor: pointer; clicked => { root.open-link(root.repo-url); } }
+                    }
                 }
-                Text {
-                    text: root.rel-label + ": " + root.rel-url;
-                    color: ta2.has-hover ? #9fd0ff : #4da3ff;
-                    wrap: word-wrap;
-                    ta2 := TouchArea { mouse-cursor: pointer; clicked => { root.open-link(root.rel-url); } }
+                VerticalLayout {
+                    spacing: 2px;
+                    Text { text: root.rel-label + ":"; color: Palette.foreground; wrap: word-wrap; }
+                    Text {
+                        text: root.rel-url;
+                        color: ta2.has-hover ? #9fd0ff : #4da3ff;
+                        wrap: word-wrap;
+                        ta2 := TouchArea { mouse-cursor: pointer; clicked => { root.open-link(root.rel-url); } }
+                    }
                 }
                 Text { text: root.info2; color: Palette.foreground; wrap: word-wrap; }
             }
