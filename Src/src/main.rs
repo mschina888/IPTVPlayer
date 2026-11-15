@@ -404,7 +404,7 @@ fn on_playlist(app: &Rc<App>, pl: m3u::Playlist, with_epg: bool) {
     }
     // debug/self-test: IPTV_AUTOPLAY=<channel index>
     if let Some(i) = std::env::var("IPTV_AUTOPLAY").ok().and_then(|n| n.parse::<usize>().ok()) {
-        play(app, i);
+        play(app, i, true);
         Timer::single_shot(Duration::from_secs(14), || {
             with_app(|a| {
                 if let Some(p) = a.player.borrow().as_ref() {
@@ -629,7 +629,7 @@ fn effective_url(s: &Settings, url: &str) -> String {
     url.to_string()
 }
 
-fn play(app: &Rc<App>, idx: usize) {
+fn play(app: &Rc<App>, idx: usize, scroll: bool) {
     let (url, name_line) = {
         let mut st = app.st.borrow_mut();
         let Some(c) = st.channels.get(idx).cloned() else { return };
@@ -648,9 +648,16 @@ fn play(app: &Rc<App>, idx: usize) {
         show_osd(app);
     }
     rebuild_rows(app);
-    if let Some(pos) = app.rows.iter().position(|r| r.kind == 1 && r.idx == idx as i32) {
-        app.win.set_scroll_to_row(-1);
-        app.win.set_scroll_to_row(pos as i32);
+    // scroll=false: a direct click in the list must not recenter/jump the list under the
+    // cursor (reported 2026-11-08: double-click landed on the wrong channel because the
+    // first click's auto-centering moved the row). scroll=true is still used for startup
+    // restore, opening the list, and Prev/Next navigation, where keeping the active
+    // channel in view is wanted.
+    if scroll {
+        if let Some(pos) = app.rows.iter().position(|r| r.kind == 1 && r.idx == idx as i32) {
+            app.win.set_scroll_to_row(-1);
+            app.win.set_scroll_to_row(pos as i32);
+        }
     }
 }
 
@@ -694,7 +701,7 @@ fn step_channel(app: &Rc<App>, dir: i32) {
         };
         vis[next]
     };
-    play(app, target);
+    play(app, target, true);
 }
 
 fn set_volume(app: &Rc<App>, v: i32) {
@@ -822,7 +829,7 @@ fn toggle_pause(app: &Rc<App>) {
     }
     let cur = app.st.borrow().cur;
     if let Some(i) = cur {
-        play(app, i);
+        play(app, i, false);
     }
 }
 
@@ -922,7 +929,7 @@ fn wire_main(app: &Rc<App>) {
     });
 
     let a = app.clone();
-    w.on_channel_clicked(move |i| play(&a, i as usize));
+    w.on_channel_clicked(move |i| play(&a, i as usize, false));
 
     let a = app.clone();
     w.on_group_toggled(move |name| {
