@@ -151,6 +151,17 @@ impl Mpv {
     }
 }
 
+/// (cache-secs, demuxer-max-bytes в MiB) для заданного значения кэша в мс.
+/// 0 (Авто) -> исходные значения (6с / 16MiB). Больше кэша -> пропорционально больше буфер демультиплексора (от той же базовой пропорции 6с/16MiB), но не меньше 16MiB.
+fn cache_values(cache_ms: i32) -> (f64, u64) {
+    if cache_ms <= 0 {
+        return (6.0, 16);
+    }
+    let secs = (cache_ms as f64 / 1000.0).clamp(0.5, 120.0);
+    let mb = ((secs / 6.0) * 16.0).ceil().max(16.0) as u64;
+    (secs, mb)
+}
+
 pub struct Player {
     pub mpv: Arc<Mpv>,
     running: Arc<AtomicBool>,
@@ -163,6 +174,7 @@ impl Player {
         dll: &std::path::Path,
         wid: isize,
         gpu: bool,
+        cache_ms: i32,
         on_message: Box<dyn Fn(Vec<String>) + Send + 'static>,
     ) -> Result<Player, String> {
         let mpv = Mpv::load(dll)?;
@@ -188,9 +200,10 @@ impl Player {
         mpv.option("msg-level", "all=warn");
         mpv.option("network-timeout", "15");
         mpv.option("cache", "yes");
-        mpv.option("demuxer-max-bytes", "16MiB");
+        let (cache_secs, demux_mb) = cache_values(cache_ms);
+        mpv.option("demuxer-max-bytes", &format!("{demux_mb}MiB"));
         mpv.option("demuxer-max-back-bytes", "1MiB");
-        mpv.option("cache-secs", "6");
+        mpv.option("cache-secs", &format!("{cache_secs}"));
         mpv.option("hwdec", if gpu { "auto-safe" } else { "no" });
         mpv.init()?;
         let mpv = Arc::new(mpv);
@@ -230,6 +243,20 @@ impl Player {
 
     pub fn bind(&self, key: &str, action: &str) {
         self.mpv.command(&["keybind", key, &format!("script-message iptv {action}")]);
+    }
+
+    /// Изменить размер буфера без перезапуска mpv (применяется к текущему/следующему файлу). cache_ms=0 -> Авто.
+    pub fn set_cache(&self, cache_ms: i32) {
+        let (secs, mb) = cache_values(cache_ms);
+        self.mpv.set("cache-secs", &format!("{secs}"));
+        self.mpv.set("demuxer-max-bytes", &format!("{mb}MiB"));
+    }
+
+    /// (секунды буфера вперёд, идёт ли сейчас буферизация из-за нехватки данных). None если mpv ещё не отдаёт значение (нет активного потока).
+    pub fn cache_stats(&self) -> Option<(f64, bool)> {
+        let dur = self.mpv.get("demuxer-cache-duration")?.parse::<f64>().ok()?;
+        let paused = self.mpv.get("paused-for-cache").map(|v| v == "yes").unwrap_or(false);
+        Some((dur, paused))
     }
 
     pub fn unbind(&self, key: &str) {

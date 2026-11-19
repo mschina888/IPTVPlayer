@@ -1,7 +1,7 @@
 ﻿[Setup]
 AppId={{7B1E5C2A-3F4D-4E8A-9C61-IPTVPLAYER0001}
 AppName=IPTV Player для Windows 11 x64
-AppVersion=0.1.18
+AppVersion=0.2.00
 AppPublisher=MSChina888
 DefaultDirName={autopf}\IPTVPlayer
 DefaultGroupName=IPTV Player
@@ -9,7 +9,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.22000
 OutputDir=D:\GIT\Claude\Projects\BuildApps\IPTVPlayer\Release
-OutputBaseFilename=IPTVPlayer-Setup-0.1.18
+OutputBaseFilename=IPTVPlayer-Setup-0.2.00
 SetupIconFile=D:\GIT\Claude\Projects\BuildApps\IPTVPlayer\Src\assets\app.ico
 UninstallDisplayIcon={app}\iptvplayer.exe
 Compression=lzma2/ultra64

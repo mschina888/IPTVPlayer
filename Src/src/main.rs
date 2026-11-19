@@ -32,6 +32,14 @@ struct State {
     logos: HashMap<usize, Image>,
     audio_names: Vec<String>,
     audio_descs: Vec<String>,
+    /// cache= из заголовка #EXTM3U текущего плейлиста (мс), если провайдер указал. Используется как default для режима Авто.
+    playlist_cache_ms: Option<i64>,
+    /// Варианты качества (из master-плейлиста #EXT-X-STREAM-INF) для текущего канала, отсортированы по убыванию битрейта (сначала лучшее). Пусто, если канал не отдаёт свой плейлист ещё не загружен или является плоской медиа-плейлистом.
+    cur_variants: Vec<m3u::Variant>,
+    /// Текущий индекс в cur_variants (если не пусто); увеличивается при автопереключении на меньшее качество.
+    cur_variant_idx: usize,
+    /// Счётчик подряд сигналов "буферизация/нехватка данных" подряд — для автопереключения требуется несколько подряд подряд, чтобы не дёргаться на кратковременный всплеск.
+    stall_streak: u32,
 }
 
 struct App {
@@ -102,6 +110,10 @@ fn main() -> Result<(), slint::PlatformError> {
             logos: HashMap::new(),
             audio_names: vec![],
     audio_descs: vec![],
+            playlist_cache_ms: None,
+            cur_variants: vec![],
+            cur_variant_idx: 0,
+            stall_streak: 0,
         }),
         player: RefCell::new(None),
         rows,
@@ -155,6 +167,14 @@ fn main() -> Result<(), slint::PlatformError> {
             })
         });
         app.timers.borrow_mut().push(t2);
+
+        let t3 = Timer::default();
+        t3.start(TimerMode::Repeated, Duration::from_millis(1000), || {
+            with_app(|a| {
+                update_buf_status(a);
+            })
+        });
+        app.timers.borrow_mut().push(t3);
     }
     app.win.set_clock(epg::hhmm(epg::now_unix()).into());
     schedule_updates(&app);
@@ -214,10 +234,12 @@ fn init_video(app: &Rc<App>) {
     let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_default();
     let dll = exe_dir.join("libmpv-2.dll");
     let gpu = app.st.borrow().s.gpu;
+    let cache_ms = app.st.borrow().s.cache_ms;
     let res = mpv::Player::start(
         &dll,
         child,
         gpu,
+        cache_ms,
         Box::new(|msg: Vec<String>| {
             let _ = slint::invoke_from_event_loop(move || with_app(|a| on_mpv_message(a, msg)));
         }),
@@ -326,7 +348,16 @@ fn apply_audio_video(app: &Rc<App>) {
         } else {
             m.set("audio-device", "auto");
         }
+        p.set_cache(effective_cache_ms(&st));
     }
+}
+
+/// Эффективное значение кэша (мс): если пользователь задал своё значение (> 0) — оно; иначе, в режиме Авто (0), берётся cache= из заголовка текущего плейлиста, если провайдер его указал; иначе 0 (исходные значения mpv).
+fn effective_cache_ms(st: &State) -> i32 {
+    if st.s.cache_ms > 0 {
+        return st.s.cache_ms;
+    }
+    st.playlist_cache_ms.map(|v| v.clamp(1, 120_000) as i32).unwrap_or(0)
 }
 
 // ------------------------------------------------------------------ playlist / epg
@@ -366,12 +397,14 @@ fn on_playlist(app: &Rc<App>, pl: m3u::Playlist, with_epg: bool) {
         let mut st = app.st.borrow_mut();
         st.channels = pl.channels;
         st.url_tvg = pl.url_tvg;
+        st.playlist_cache_ms = pl.cache_ms;
         st.logos.clear();
         st.epg_ids = vec![None; st.channels.len()];
         // keep current channel pointer if still present
         let last = st.s.last_channel.clone();
         st.cur = st.channels.iter().position(|c| c.key() == last);
     }
+    apply_audio_video(app); // переприменить эффективный кэш с учётом cache= нового плейлиста (режим Авто)
     app.win.set_notice("".into());
     dlog(&format!("playlist: {} channels, url-tvg {:?}", app.st.borrow().channels.len(), app.st.borrow().url_tvg));
     start_logos(app);
@@ -526,6 +559,70 @@ fn start_logos(app: &Rc<App>) {
     logos::spawn(items, app.pending_logos.clone(), app.logo_gen.clone(), gen);
 }
 
+/// Читает текущее состояние буфера mpv и обновляет индикатор в строке состояния.
+/// При подряд сигналах буферизации и наличии более низкого качества в cur_variants — автоматически переключается на него.
+/// Автопереключение только вниз, обратно на лучшее качество в v0.2.00 не предусмотрено — зафиксированное ограничение.
+fn update_buf_status(app: &Rc<App>) {
+    let stats = app.player.borrow().as_ref().and_then(|p| p.cache_stats());
+    let (level, status, downgrade) = {
+        let mut st = app.st.borrow_mut();
+        if st.cur.is_none() {
+            st.stall_streak = 0;
+            (0i32, String::new(), false)
+        } else {
+            match stats {
+                None => {
+                    st.stall_streak = 0;
+                    (0i32, String::new(), false)
+                }
+                Some((dur, paused)) => {
+                    if paused {
+                        st.stall_streak = st.stall_streak.saturating_add(1);
+                    } else {
+                        st.stall_streak = 0;
+                    }
+                    let lvl: i32 = if paused { 3 } else if dur < 2.0 { 2 } else { 1 };
+                    let status = if paused {
+                        tr(st.s.lang, "Буферизация...", "Buffering...").to_string()
+                    } else {
+                        i18n::fmt(tr(st.s.lang, "Буфер: {}с", "Buffer: {}s"), &[&format!("{:.1}", dur)])
+                    };
+                    // 5 подряд тиков (~5с при интервале 1с) буферизации подряд — чтобы не дёргаться на кратковременный всплеск
+                    let has_lower = st.cur_variant_idx + 1 < st.cur_variants.len();
+                    let should_downgrade = st.stall_streak >= 5 && has_lower;
+                    if should_downgrade {
+                        st.stall_streak = 0;
+                    }
+                    (lvl, status, should_downgrade)
+                }
+            }
+        }
+    };
+    app.win.set_buf_level(level);
+    app.win.set_buf_status(status.into());
+    if downgrade {
+        downgrade_quality(app);
+    }
+}
+
+/// Переключает текущий канал на следующий по списку (менее битрейт) вариант из cur_variants.
+fn downgrade_quality(app: &Rc<App>) {
+    let next_url = {
+        let mut st = app.st.borrow_mut();
+        if st.cur_variant_idx + 1 >= st.cur_variants.len() {
+            return;
+        }
+        st.cur_variant_idx += 1;
+        st.cur_variants.get(st.cur_variant_idx).map(|v| v.url.clone())
+    };
+    if let Some(url) = next_url {
+        if let Some(p) = app.player.borrow().as_ref() {
+            dlog(&format!("auto-downgrade: switching to lower quality variant: {url}"));
+            p.mpv.command(&["loadfile", &url, "replace"]);
+        }
+    }
+}
+
 fn drain_logos(app: &Rc<App>) {
     let items: Vec<_> = std::mem::take(&mut *app.pending_logos.lock().unwrap());
     if items.is_empty() {
@@ -545,7 +642,11 @@ fn drain_logos(app: &Rc<App>) {
 fn epg_now_title(st: &State, idx: usize, now: i64) -> Option<(String, i64, i64)> {
     let epg = st.epg.as_ref()?;
     let id = st.epg_ids.get(idx)?.as_ref()?;
-    epg.now(id, now).map(|p| (p.title.clone(), p.start, p.stop))
+    // tvg-shift=Z (часы): телепрограмма данного канала в EPG записана со сдвигом Z часов относительно реального эфира вещания —
+    // ищем запись на сдвинутое время (now - shift), потом возвращаем start/stop обратно в реальное время (+ shift).
+    // Конвенция согласована с пользователем как наиболее распространённая, но не подтверждена на реальном tvg-shift-канале — проверить, когда появится.
+    let shift_secs = st.channels.get(idx).map(|c| (c.tvg_shift * 3600.0).round() as i64).unwrap_or(0);
+    epg.now(id, now - shift_secs).map(|p| (p.title.clone(), p.start + shift_secs, p.stop + shift_secs))
 }
 
 fn rebuild_rows(app: &Rc<App>) {
@@ -635,12 +736,17 @@ fn play(app: &Rc<App>, idx: usize, scroll: bool) {
         let Some(c) = st.channels.get(idx).cloned() else { return };
         st.cur = Some(idx);
         st.s.last_channel = c.key();
+        // новый канал — сбросить варианты/счётчик предыдущего канала, они будут перезагружены ниже
+        st.cur_variants.clear();
+        st.cur_variant_idx = 0;
+        st.stall_streak = 0;
         (effective_url(&st.s, &c.url), format!("{}. {}", idx + 1, c.name))
     };
     if let Some(p) = app.player.borrow().as_ref() {
         p.mpv.set("pause", "no");
         p.mpv.command(&["loadfile", &url, "replace"]);
     }
+    fetch_variants(app, idx, url.clone());
     app.win.set_cur_name(name_line.into());
     app.win.set_playing(true);
     refresh_cur_info(app);
@@ -659,6 +765,34 @@ fn play(app: &Rc<App>, idx: usize, scroll: bool) {
             app.win.set_scroll_to_row(pos as i32);
         }
     }
+}
+
+/// В фоне загружает собственный .m3u8-плейлист канала и ищет в нём master-список вариантов качества
+/// (#EXT-X-STREAM-INF). Не блокирует воспроизведение — loadfile уже запущен выше, это только для автопереключения на меньшее качество при просадках сети.
+/// По состоянию на 19.11.2026 у реального провайдера пользователя нет multi-bitrate плейлистов — это впрок, пользователь явно подтвердил.
+fn fetch_variants(_app: &Rc<App>, idx: usize, url: String) {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return;
+    }
+    std::thread::spawn(move || {
+        if let Ok(text) = net::text(&url) {
+            let variants = m3u::parse_variants(&text, &url);
+            if variants.is_empty() {
+                return;
+            }
+            let _ = slint::invoke_from_event_loop(move || {
+                with_app(|a| {
+                    let mut st = a.st.borrow_mut();
+                    // канал мог уже смениться пока шёл запрос — не применять устаревший результат
+                    if st.cur == Some(idx) {
+                        st.cur_variants = variants;
+                        st.cur_variant_idx = 0;
+                        dlog(&format!("channel {idx}: {} quality variant(s) found", st.cur_variants.len()));
+                    }
+                });
+            });
+        }
+    });
 }
 
 fn show_osd(app: &Rc<App>) {
@@ -1022,6 +1156,7 @@ fn cfg_from(s: &Settings) -> Cfg {
         saturation: s.saturation,
         local_ip: s.local_ip.clone().into(),
         udp_proxy: s.udp_proxy.clone().into(),
+        cache_ms: s.cache_ms,
         autostart: s.autostart,
     }
 }
@@ -1207,6 +1342,7 @@ fn apply_cfg(app: &Rc<App>, cfg: Cfg, status: String) {
         s.saturation = cfg.saturation;
         s.local_ip = cfg.local_ip.to_string();
         s.udp_proxy = cfg.udp_proxy.to_string();
+        s.cache_ms = cfg.cache_ms;
         let autostart_changed = s.autostart != cfg.autostart;
         s.autostart = cfg.autostart;
         if let Some(n) = status.strip_prefix("dev:").and_then(|n| n.parse::<usize>().ok()) {

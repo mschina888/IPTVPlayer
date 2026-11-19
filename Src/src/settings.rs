@@ -44,6 +44,8 @@ pub struct Settings {
     pub contrast: i32,
     pub saturation: i32,
     pub audio_device: String,
+    /// Буфер/кэш mpv, мс. 0 = Авто (встроенные значения mpv.rs; возможно переопределены cache= из плейлиста).
+    pub cache_ms: i32,
     pub local_ip: String,
     pub udp_proxy: String,
     pub autostart: bool,
@@ -89,6 +91,7 @@ impl Default for Settings {
             contrast: 0,
             saturation: 0,
             audio_device: String::new(),
+            cache_ms: 0,
             local_ip: String::new(),
             udp_proxy: String::new(),
             autostart: false,

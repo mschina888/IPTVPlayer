@@ -45,6 +45,7 @@ export struct Cfg {
     saturation: int,
     local-ip: string,
     udp-proxy: string,
+    cache-ms: int,
     autostart: bool,
 }
 
@@ -97,6 +98,9 @@ export component MainWindow inherits Window {
     in-out property <float> volume: 80;
     in-out property <bool> muted: false;
     in-out property <string> notice;
+    // Индикатор состояния сети/буфера. buf-level: 0=нет данных (скрыто), 1=норма (зелёный), 2=просадка (жёлтый), 3=буферизация (красный).
+    in-out property <int> buf-level: 0;
+    in-out property <string> buf-status;
 
     out property <length> vx: (root.list-visible && root.list-left) ? root.list-w : 0px;
     out property <length> vy: 0px;
@@ -352,6 +356,22 @@ export component MainWindow inherits Window {
                     overflow: elide;
                     horizontal-stretch: 1;
                 }
+                if root.buf-level > 0 : HorizontalLayout {
+                    spacing: 4px;
+                    Rectangle {
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 5px;
+                        y: (parent.height - self.height) / 2;
+                        background: root.buf-level == 1 ? #39c45a : root.buf-level == 2 ? #e0b020 : #e04040;
+                    }
+                    Text {
+                        text: root.buf-status;
+                        font-size: (root.font-size - 1) * 1px;
+                        color: Palette.foreground.with-alpha(0.75);
+                        vertical-alignment: center;
+                    }
+                }
                 if root.show-clock : Text {
                     text: root.clock;
                     font-size: root.font-size * 1px;
@@ -549,6 +569,21 @@ export component SettingsWindow inherits Window {
                 Switch { text: root.t("Аппаратное ускорение GPU (если есть)", "GPU hardware acceleration (if available)"); checked: root.cfg.gpu; toggled => { root.cfg.gpu = self.checked; } }
                 Switch { text: root.t("Деинтерлейс", "Deinterlace"); checked: root.cfg.deint; toggled => { root.cfg.deint = self.checked; } }
                 Switch { text: root.t("Моно", "Mono"); checked: root.cfg.mono; toggled => { root.cfg.mono = self.checked; } }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: root.t("Буфер/кэш (мс)", "Buffer/cache (ms)"); color: Palette.foreground; vertical-alignment: center; width: 200px; }
+                    Switch {
+                        text: root.t("Авто", "Auto");
+                        checked: root.cfg.cache-ms <= 0;
+                        toggled => { root.cfg.cache-ms = self.checked ? 0 : 6000; }
+                    }
+                    if root.cfg.cache-ms > 0 : SpinBox {
+                        minimum: 500;
+                        maximum: 60000;
+                        value: root.cfg.cache-ms;
+                        edited(v) => { root.cfg.cache-ms = v; }
+                    }
+                }
                 HorizontalLayout {
                     spacing: 10px;
                     Text { text: root.t("Соотношение сторон", "Aspect ratio"); color: Palette.foreground; vertical-alignment: center; width: 200px; }

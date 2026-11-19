@@ -6,6 +6,8 @@ pub struct Channel {
     pub tvg_id: String,
     pub tvg_name: String,
     pub logo: String,
+    /// сдвиг времени EPG в часах (tvg-shift=, может быть дробным), 0.0 если не задан
+    pub tvg_shift: f64,
 }
 
 impl Channel {
@@ -22,6 +24,8 @@ impl Channel {
 pub struct Playlist {
     pub channels: Vec<Channel>,
     pub url_tvg: Vec<String>,
+    /// cache= из заголовка #EXTM3U, мс (default-значение для режима «Авто» буфера, если провайдер его указал)
+    pub cache_ms: Option<i64>,
 }
 
 fn attr(s: &str, key: &str) -> Option<String> {
@@ -70,6 +74,7 @@ pub fn parse(text: &str) -> Playlist {
             if let Some(u) = attr(line, "url-tvg").or_else(|| attr(line, "x-tvg-url")) {
                 pl.url_tvg = u.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
             }
+            pl.cache_ms = attr(line, "cache").and_then(|v| v.parse::<i64>().ok());
             continue;
         }
         if let Some(rest) = line.strip_prefix("#EXTINF:") {
@@ -80,6 +85,7 @@ pub fn parse(text: &str) -> Playlist {
             c.tvg_name = attr(&attrs, "tvg-name").unwrap_or_default();
             c.logo = attr(&attrs, "tvg-logo").unwrap_or_default();
             c.group = attr(&attrs, "group-title").unwrap_or_default();
+            c.tvg_shift = attr(&attrs, "tvg-shift").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
             if c.group.is_empty() {
                 c.group = std::mem::take(&mut pending_group);
             }
@@ -110,4 +116,124 @@ pub fn parse(text: &str) -> Playlist {
         }
     }
     pl
+}
+
+/// One quality variant of a channel's own HLS stream, from a master playlist's
+/// #EXT-X-STREAM-INF (BANDWIDTH/RESOLUTION) line + the URI that follows it.
+#[derive(Clone, Debug)]
+pub struct Variant {
+    pub bandwidth: i64,
+    pub width: i32,
+    pub height: i32,
+    pub url: String,
+}
+
+/// Splits a comma-separated attribute list (as used by #EXT-X-STREAM-INF) into its parts,
+/// without splitting inside a quoted value (so CODECS="a,b" stays one part).
+fn split_csv_attrs(s: &str) -> Vec<&str> {
+    let mut out = vec![];
+    let mut start = 0;
+    let mut in_quotes = false;
+    for (i, b) in s.bytes().enumerate() {
+        match b {
+            b'"' => in_quotes = !in_quotes,
+            b',' if !in_quotes => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// Like `attr()`, but for comma-separated attribute lists (#EXT-X-STREAM-INF), not the
+/// space-separated lists used by #EXTM3U/#EXTINF. `attr()` cannot be reused here: it ends
+/// an unquoted value at the first whitespace, which never occurs before the next comma.
+fn attr_csv(s: &str, key: &str) -> Option<String> {
+    for part in split_csv_attrs(s) {
+        let part = part.trim();
+        if let Some(rest) = part.strip_prefix(key).and_then(|r| r.strip_prefix('=')) {
+            let v = rest.trim();
+            if let Some(stripped) = v.strip_prefix('"') {
+                return Some(stripped.strip_suffix('"').unwrap_or(stripped).to_string());
+            }
+            return Some(v.to_string());
+        }
+    }
+    None
+}
+
+/// Resolve a possibly-relative URI against the base playlist URL (same directory).
+fn resolve_url(base: &str, rel: &str) -> String {
+    if rel.starts_with("http://") || rel.starts_with("https://") {
+        return rel.to_string();
+    }
+    match base.rfind('/') {
+        Some(pos) => format!("{}/{}", &base[..pos], rel),
+        None => rel.to_string(),
+    }
+}
+
+/// Parse a channel's OWN stream playlist (fetched separately from the main channel
+/// list). If it is a master playlist (contains #EXT-X-STREAM-INF), returns its
+/// variants sorted by bandwidth, highest first. If it is a plain media playlist
+/// (direct segments, no STREAM-INF) — today's case for most providers — returns
+/// an empty list, meaning: nothing to switch between, play `base_url` as-is.
+pub fn parse_variants(text: &str, base_url: &str) -> Vec<Variant> {
+    let mut out = vec![];
+    let mut pending: Option<(i64, i32, i32)> = None;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if let Some(rest) = line.strip_prefix("#EXT-X-STREAM-INF:") {
+            let bw = attr_csv(rest, "BANDWIDTH").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+            let (mut w, mut h) = (0, 0);
+            if let Some(res) = attr_csv(rest, "RESOLUTION") {
+                if let Some((a, b)) = res.split_once('x') {
+                    w = a.trim().parse().unwrap_or(0);
+                    h = b.trim().parse().unwrap_or(0);
+                }
+            }
+            pending = Some((bw, w, h));
+            continue;
+        }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((bw, w, h)) = pending.take() {
+            out.push(Variant { bandwidth: bw, width: w, height: h, url: resolve_url(base_url, line) });
+        }
+    }
+    out.sort_by(|a, b| b.bandwidth.cmp(&a.bandwidth));
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_master_playlist_variants() {
+        let m = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080\nhd/index.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=1500000,RESOLUTION=1280x720\nsd/index.m3u8\n";
+        let v = parse_variants(m, "http://host/iptv/ch1/index.m3u8");
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].bandwidth, 6000000);
+        assert_eq!(v[0].url, "http://host/iptv/ch1/hd/index.m3u8");
+        assert_eq!(v[1].bandwidth, 1500000);
+    }
+
+    #[test]
+    fn plain_media_playlist_has_no_variants() {
+        let m = "#EXTM3U\n#EXT-X-TARGETDURATION:11\n#EXTINF:10.4,\nseg1.ts\n";
+        assert!(parse_variants(m, "http://host/ch1/index.m3u8").is_empty());
+    }
+
+    #[test]
+    fn parses_cache_and_tvg_shift() {
+        let m = "#EXTM3U url-tvg=\"http://x/epg.xml\" cache=1050\n#EXTINF:0 tvg-shift=\"-1.5\",Ch\nhttp://x/ch.m3u8\n";
+        let pl = parse(m);
+        assert_eq!(pl.cache_ms, Some(1050));
+        assert_eq!(pl.channels[0].tvg_shift, -1.5);
+    }
 }
